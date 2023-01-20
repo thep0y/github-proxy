@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-01-20 13:13:16
+ * @Modified At: 2023-01-20 17:47:29
  * @Modified By: thepoy
  */
 
@@ -250,6 +250,7 @@ func handler(c *fiber.Ctx) error {
 func init() {
 	rand.Seed(time.Now().UnixNano())
 
+	zerolog.TimeFieldFormat = logger.TimeFormat
 	log = log.With().CallerWithSkipFrameCount(2).Timestamp().Logger()
 }
 
