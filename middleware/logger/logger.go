@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   logger.go
  * @Created At:  2023-01-20 11:22:51
- * @Modified At: 2023-01-20 12:53:45
+ * @Modified At: 2023-01-20 17:55:44
  * @Modified By: thepoy
  */
 
@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	TimeFormat = "2006-01-02 15:04:05.999999999"
+	TimeFormat = "2006-01-02 15:04:05.999"
 )
 
 // Config defines the config for logger middleware.
@@ -79,7 +79,11 @@ func New(config ...Config) fiber.Handler {
 			Logger()
 
 		if chainErr != nil {
-			dumplogger.Err(chainErr).Send()
+			if e, ok := chainErr.(*fiber.Error); ok {
+				dumplogger.Err(chainErr).Int("status-code", e.Code).Send()
+			} else {
+				dumplogger.Err(chainErr).Int("status-code", fiber.StatusInternalServerError).Msg("unkown error")
+			}
 
 			return chainErr
 		}
