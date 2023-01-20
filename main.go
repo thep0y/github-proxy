@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-01-20 17:47:29
+ * @Modified At: 2023-01-20 23:20:01
  * @Modified By: thepoy
  */
 
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"github-proxy/middleware/logger"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,6 +31,8 @@ import (
 const (
 	// 免费用户单个文件允许代理的最大体积 200 M
 	MAX_SIZE = 200 * 1024 * 1024
+
+	TIMEOUT = 10 * time.Second
 )
 
 var (
@@ -69,31 +72,46 @@ func newErrorResponse(err error) ErrorResponse {
 	return ErrorResponse{err.Error()}
 }
 
-var clientPool sync.Pool
+func dialTimeout(network, addr string) (net.Conn, error) {
+	return net.DialTimeout(network, addr, TIMEOUT)
+}
+
+var (
+	transport = http.Transport{
+		Dial: dialTimeout,
+	}
+
+	clientPool sync.Pool
+)
 
 func acquireClient() *http.Client {
+	log.Trace().Msg("acquire a client")
+
 	client := clientPool.Get()
 	if client != nil {
 		return client.(*http.Client)
 	}
 
 	return &http.Client{
-		Timeout: 10 * time.Second,
+		Transport: &transport,
 	}
 }
 
 func releaseClient(client *http.Client) {
 	client.CheckRedirect = nil
 	client.Jar = nil
-	client.Timeout = 10 * time.Second
-	client.Transport = nil
+	client.Transport = &transport
 
 	clientPool.Put(client)
+
+	log.Trace().Msg("release a client")
 }
 
 var requestPool sync.Pool
 
 func acquireRequest(u string) (*http.Request, error) {
+	log.Trace().Msg("acquire a request")
+
 	parsedURL, err := url.Parse(u)
 	if err != nil {
 		return nil, err
@@ -125,6 +143,8 @@ func releaseRequest(req *http.Request) {
 	req.Host = ""
 
 	requestPool.Put(req)
+
+	log.Trace().Msg("release a request")
 }
 
 func checkURL(u string) bool {
@@ -158,6 +178,8 @@ func proxy(c *fiber.Ctx, u string) error {
 		}
 	})
 
+	log.Trace().Msg("send a request")
+
 	resp, err := client.Do(req)
 	if err != nil {
 		if e, ok := err.(*url.Error); ok {
@@ -170,6 +192,8 @@ func proxy(c *fiber.Ctx, u string) error {
 		c.Status(fiber.StatusInternalServerError)
 		return err
 	}
+
+	log.Trace().Msg("got a response")
 
 	response := c.Response()
 	switch resp.StatusCode {
@@ -257,10 +281,17 @@ func init() {
 func main() {
 	app := fiber.New()
 	app.Use(logger.New(logger.Config{Logger: &log}))
-
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendString("Hello, World 👋!")
+	app.Static("/", "./static", fiber.Static{
+		Compress:      true,
+		ByteRange:     true,
+		Browse:        true,
+		CacheDuration: 10 * time.Hour * 24, // 缓存 10 天
+		MaxAge:        60 * 60 * 24 * 10,   // 缓存 10 天
 	})
+
+	// app.Get("/", func(c *fiber.Ctx) error {
+	// 	return c.SendString("Hello, World 👋!")
+	// })
 
 	app.Get("/download/+", handler)
 	// app.Get("/test/+", test)
