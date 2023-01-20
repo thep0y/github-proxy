@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-01-20 12:51:09
+ * @Modified At: 2023-01-20 13:13:16
  * @Modified By: thepoy
  */
 
@@ -58,6 +58,7 @@ func (ol *OverLimit) Error() string {
 
 var (
 	ErrInvalidInput = errors.New("链接无效")
+	ErrTimeout      = errors.New("请求超时")
 )
 
 type ErrorResponse struct {
@@ -76,13 +77,15 @@ func acquireClient() *http.Client {
 		return client.(*http.Client)
 	}
 
-	return new(http.Client)
+	return &http.Client{
+		Timeout: 10 * time.Second,
+	}
 }
 
 func releaseClient(client *http.Client) {
 	client.CheckRedirect = nil
 	client.Jar = nil
-	client.Timeout = 0
+	client.Timeout = 10 * time.Second
 	client.Transport = nil
 
 	clientPool.Put(client)
@@ -91,15 +94,18 @@ func releaseClient(client *http.Client) {
 var requestPool sync.Pool
 
 func acquireRequest(u string) (*http.Request, error) {
-	req := requestPool.Get()
-	if req != nil {
-		return req.(*http.Request), nil
-	}
-
 	parsedURL, err := url.Parse(u)
 	if err != nil {
 		return nil, err
 	}
+
+	req := requestPool.Get()
+	if req != nil {
+		r := req.(*http.Request)
+		r.URL = parsedURL
+		return r, nil
+	}
+
 	return &http.Request{
 		Method:     http.MethodGet,
 		URL:        parsedURL,
@@ -154,6 +160,14 @@ func proxy(c *fiber.Ctx, u string) error {
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if e, ok := err.(*url.Error); ok {
+			if e.Timeout() {
+				c.Status(fiber.StatusGatewayTimeout)
+				return ErrTimeout
+			}
+		}
+
+		c.Status(fiber.StatusInternalServerError)
 		return err
 	}
 
@@ -190,6 +204,7 @@ func proxy(c *fiber.Ctx, u string) error {
 	case fiber.StatusFound:
 		return proxy(c, resp.Header.Get("Location"))
 	default:
+		c.Status(resp.StatusCode)
 		log.Error().
 			Int("status-code", resp.StatusCode).
 			Msg("响应错误")
