@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-01-20 23:20:01
+ * @Modified At: 2023-01-23 15:30:25
  * @Modified By: thepoy
  */
 
@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"github-proxy/middleware/logger"
+	"io"
 	"math/rand"
 	"net"
 	"net/http"
@@ -44,11 +45,7 @@ var (
 
 	regexps = [5]*regexp.Regexp{ptn1, ptn2, ptn3, ptn4, ptn5}
 
-	log = zerolog.New(zerolog.ConsoleWriter{
-		Out:        os.Stdout,
-		TimeFormat: logger.TimeFormat,
-	}).
-		Level(zerolog.TraceLevel)
+	log zerolog.Logger
 )
 
 type OverLimit struct {
@@ -274,8 +271,29 @@ func handler(c *fiber.Ctx) error {
 func init() {
 	rand.Seed(time.Now().UnixNano())
 
+	var (
+		w   io.Writer
+		err error
+	)
+	env := os.Getenv("GP_ENV")
+	if env == "dev" {
+		w = zerolog.ConsoleWriter{
+			Out:        os.Stdout,
+			TimeFormat: logger.TimeFormat,
+		}
+	} else {
+		w, err = os.OpenFile("proxy.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+		if err != nil {
+			panic(err)
+		}
+	}
+	log = zerolog.New(w).Level(zerolog.TraceLevel)
+
 	zerolog.TimeFieldFormat = logger.TimeFormat
-	log = log.With().CallerWithSkipFrameCount(2).Timestamp().Logger()
+	log = log.With().
+		CallerWithSkipFrameCount(2).
+		Timestamp().
+		Logger()
 }
 
 func main() {
