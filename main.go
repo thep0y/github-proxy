@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-01-23 15:30:25
+ * @Modified At: 2023-01-26 08:46:09
  * @Modified By: thepoy
  */
 
@@ -234,22 +234,27 @@ func proxy(c *fiber.Ctx, u string) error {
 	return nil
 }
 
-func handler(c *fiber.Ctx) error {
-	url := c.Params("+")
-	if url[:4] != "http" {
-		url = "https://" + url
+func handler(c *fiber.Ctx) (err error) {
+	u := c.Params("+")
+	if u[:4] != "http" {
+		u = "https://" + u
 	}
 
-	if !checkURL(url) {
+	u, err = url.QueryUnescape(u)
+	if err != nil {
+		return
+	}
+
+	if !checkURL(u) {
 		c.Status(fiber.StatusBadRequest)
 		return c.JSON(newErrorResponse(ErrInvalidInput))
 	}
 
-	if ptn2.MatchString(url) {
-		url = strings.Replace(url, "/blob/", "/raw/", 1)
+	if ptn2.MatchString(u) {
+		u = strings.Replace(u, "/blob/", "/raw/", 1)
 	}
 
-	err := proxy(c, url)
+	err = proxy(c, u)
 	if err != nil {
 		return c.JSON(newErrorResponse(err))
 	}
@@ -272,8 +277,9 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 
 	var (
-		w   io.Writer
-		err error
+		w     io.Writer
+		level zerolog.Level
+		err   error
 	)
 	env := os.Getenv("GP_ENV")
 	if env == "dev" {
@@ -281,13 +287,15 @@ func init() {
 			Out:        os.Stdout,
 			TimeFormat: logger.TimeFormat,
 		}
+		level = zerolog.TraceLevel
 	} else {
 		w, err = os.OpenFile("proxy.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 		if err != nil {
 			panic(err)
 		}
+		level = zerolog.DebugLevel
 	}
-	log = zerolog.New(w).Level(zerolog.TraceLevel)
+	log = zerolog.New(w).Level(level)
 
 	zerolog.TimeFieldFormat = logger.TimeFormat
 	log = log.With().
@@ -311,7 +319,7 @@ func main() {
 	// 	return c.SendString("Hello, World 👋!")
 	// })
 
-	app.Get("/download/+", handler)
+	app.Get("/+", handler)
 	// app.Get("/test/+", test)
 
 	app.Listen(":3000")
