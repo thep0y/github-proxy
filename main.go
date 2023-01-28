@@ -3,13 +3,14 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-01-26 08:46:09
+ * @Modified At: 2023-01-28 20:28:18
  * @Modified By: thepoy
  */
 
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github-proxy/middleware/logger"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog"
+	"github.com/valyala/fasthttp"
 )
 
 const (
@@ -59,6 +61,7 @@ func (ol *OverLimit) Error() string {
 var (
 	ErrInvalidInput = errors.New("链接无效")
 	ErrTimeout      = errors.New("请求超时")
+	ErrMethod       = errors.New("错误的请求方式")
 )
 
 type ErrorResponse struct {
@@ -82,7 +85,7 @@ var (
 )
 
 func acquireClient() *http.Client {
-	log.Trace().Msg("acquire a client")
+	log.Trace().Msg("Acquire a client")
 
 	client := clientPool.Get()
 	if client != nil {
@@ -101,13 +104,36 @@ func releaseClient(client *http.Client) {
 
 	clientPool.Put(client)
 
-	log.Trace().Msg("release a client")
+	log.Trace().Msg("Release a client")
 }
 
 var requestPool sync.Pool
 
-func acquireRequest(u string) (*http.Request, error) {
-	log.Trace().Msg("acquire a request")
+func newBody(body []byte) io.ReadCloser {
+	if body == nil {
+		return nil
+	}
+
+	bodyBuffer := bytes.NewBuffer(body)
+	return io.NopCloser(bodyBuffer)
+}
+
+func convertHeader(src *fasthttp.RequestHeader) http.Header {
+	if src == nil {
+		return nil
+	}
+
+	header := make(http.Header)
+
+	src.VisitAll(func(key, value []byte) {
+		header[string(key)] = append(header[string(key)], string(value))
+	})
+
+	return header
+}
+
+func acquireRequest(u string, header *fasthttp.RequestHeader, body []byte) (*http.Request, error) {
+	log.Trace().Msg("Acquire a request")
 
 	parsedURL, err := url.Parse(u)
 	if err != nil {
@@ -118,6 +144,9 @@ func acquireRequest(u string) (*http.Request, error) {
 	if req != nil {
 		r := req.(*http.Request)
 		r.URL = parsedURL
+		r.Header = convertHeader(header)
+		r.Body = newBody(body)
+
 		return r, nil
 	}
 
@@ -127,8 +156,8 @@ func acquireRequest(u string) (*http.Request, error) {
 		Proto:      "HTTP/1.1",
 		ProtoMajor: 1,
 		ProtoMinor: 1,
-		Header:     make(http.Header),
-		Body:       nil,
+		Header:     convertHeader(header),
+		Body:       newBody(body),
 		Host:       parsedURL.Host,
 	}, nil
 }
@@ -141,7 +170,7 @@ func releaseRequest(req *http.Request) {
 
 	requestPool.Put(req)
 
-	log.Trace().Msg("release a request")
+	log.Trace().Msg("Release a request")
 }
 
 func checkURL(u string) bool {
@@ -155,18 +184,32 @@ func checkURL(u string) bool {
 }
 
 func proxy(c *fiber.Ctx, u string) error {
-	log.Info().Str("url", u).Msg("download")
+	switch c.Method() {
+	case fiber.MethodGet:
+		log.Info().Str("url", u).Msg("Downloading")
+	case fiber.MethodPost:
+		log.Info().Str("url", u).Msg("Pushing")
+	default:
+		log.Error().Msg("Invalid method")
+
+		return ErrMethod
+	}
 
 	c.Request().Header.Del("Host")
 
 	client := acquireClient()
 	defer releaseClient(client)
 
-	req, err := acquireRequest(u)
+	req, err := acquireRequest(u, &c.Request().Header, c.Request().Body())
 	if err != nil {
 		return err
 	}
 	defer releaseRequest(req)
+	fields := make(map[string]interface{})
+	for k, v := range req.Header {
+		fields[k] = v
+	}
+	log.Debug().Fields(fields).Msg("Request headers")
 
 	c.Request().Header.VisitAll(func(key, value []byte) {
 		k := string(key)
@@ -175,8 +218,10 @@ func proxy(c *fiber.Ctx, u string) error {
 		}
 	})
 
-	log.Trace().Msg("send a request")
+	log.Trace().Msg("Send a request")
 
+	// TODO: 响应池？
+	// TODO: 客户端中断请求后这里的请求也需要中断
 	resp, err := client.Do(req)
 	if err != nil {
 		if e, ok := err.(*url.Error); ok {
@@ -190,7 +235,7 @@ func proxy(c *fiber.Ctx, u string) error {
 		return err
 	}
 
-	log.Trace().Msg("got a response")
+	log.Trace().Msg("Got a response")
 
 	response := c.Response()
 	switch resp.StatusCode {
@@ -205,7 +250,7 @@ func proxy(c *fiber.Ctx, u string) error {
 
 		fileSize := float64(contentLength) / 1024 / 1024
 
-		log.Info().Str("src", u).Str("size", fmt.Sprintf("%.2fM", fileSize)).Msg("file size")
+		log.Info().Str("src", u).Str("size", fmt.Sprintf("%.2fM", fileSize)).Msg("File info")
 
 		// TODO: 以后可以给捐赠用户开放此限制
 		if contentLength > MAX_SIZE {
@@ -236,6 +281,7 @@ func proxy(c *fiber.Ctx, u string) error {
 
 func handler(c *fiber.Ctx) (err error) {
 	u := c.Params("+")
+
 	if u[:4] != "http" {
 		u = "https://" + u
 	}
@@ -245,10 +291,14 @@ func handler(c *fiber.Ctx) (err error) {
 		return
 	}
 
+	log.Debug().Str("url", u).Msg("Got a request from client")
+
 	if !checkURL(u) {
 		c.Status(fiber.StatusBadRequest)
 		return c.JSON(newErrorResponse(ErrInvalidInput))
 	}
+
+	log.Trace().Msg("Url is valid")
 
 	if ptn2.MatchString(u) {
 		u = strings.Replace(u, "/blob/", "/raw/", 1)
@@ -319,7 +369,7 @@ func main() {
 	// 	return c.SendString("Hello, World 👋!")
 	// })
 
-	app.Get("/+", handler)
+	app.All("/+", handler)
 	// app.Get("/test/+", test)
 
 	app.Listen(":3000")
