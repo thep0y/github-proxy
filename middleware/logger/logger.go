@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   logger.go
  * @Created At:  2023-01-20 11:22:51
- * @Modified At: 2023-01-23 15:38:18
+ * @Modified At: 2023-01-28 19:35:27
  * @Modified By: thepoy
  */
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/utils"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -89,18 +90,12 @@ func New(config ...Config) fiber.Handler {
 		}
 
 		switch {
-		case code >= fiber.StatusInternalServerError:
-			dumplogger.Error().Msg("server error")
 		case code >= fiber.StatusBadRequest:
-			dumplogger.Error().Msg("client error")
+			dumplogger.Err(fiber.NewError(code)).Send()
 		case code >= fiber.StatusMultipleChoices:
-			dumplogger.Warn().Msg("redirect")
-		case code >= fiber.StatusOK:
-			dumplogger.Info().Msg("success")
-		case code == fiber.StatusSwitchingProtocols:
-			dumplogger.Info().Msg("switching protocol")
-		case code == fiber.StatusContinue:
-			dumplogger.Info().Msg("continue")
+			dumplogger.Warn().Msg(utils.StatusMessage(code))
+		case code >= fiber.StatusContinue:
+			dumplogger.Info().Msg(utils.StatusMessage(code))
 		default:
 			dumplogger.Warn().Msg("unknown status")
 		}
