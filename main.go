@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-01-28 20:28:18
+ * @Modified At: 2023-01-30 16:28:20
  * @Modified By: thepoy
  */
 
@@ -48,6 +48,8 @@ var (
 	regexps = [5]*regexp.Regexp{ptn1, ptn2, ptn3, ptn4, ptn5}
 
 	log zerolog.Logger
+
+	env = os.Getenv("GP_ENV")
 )
 
 type OverLimit struct {
@@ -143,6 +145,7 @@ func acquireRequest(u string, header *fasthttp.RequestHeader, body []byte) (*htt
 	req := requestPool.Get()
 	if req != nil {
 		r := req.(*http.Request)
+		r.Method = string(header.Method())
 		r.URL = parsedURL
 		r.Header = convertHeader(header)
 		r.Body = newBody(body)
@@ -151,7 +154,7 @@ func acquireRequest(u string, header *fasthttp.RequestHeader, body []byte) (*htt
 	}
 
 	return &http.Request{
-		Method:     http.MethodGet,
+		Method:     string(header.Method()),
 		URL:        parsedURL,
 		Proto:      "HTTP/1.1",
 		ProtoMajor: 1,
@@ -167,6 +170,7 @@ func releaseRequest(req *http.Request) {
 	req.URL = nil
 	req.Header = make(http.Header)
 	req.Host = ""
+	req.Body = nil
 
 	requestPool.Put(req)
 
@@ -205,11 +209,14 @@ func proxy(c *fiber.Ctx, u string) error {
 		return err
 	}
 	defer releaseRequest(req)
-	fields := make(map[string]interface{})
-	for k, v := range req.Header {
-		fields[k] = v
+
+	if env == "dev" {
+		fields := make(map[string]interface{})
+		for k, v := range req.Header {
+			fields[k] = v
+		}
+		log.Debug().Fields(fields).Msg("Request headers")
 	}
-	log.Debug().Fields(fields).Msg("Request headers")
 
 	c.Request().Header.VisitAll(func(key, value []byte) {
 		k := string(key)
@@ -331,7 +338,7 @@ func init() {
 		level zerolog.Level
 		err   error
 	)
-	env := os.Getenv("GP_ENV")
+
 	if env == "dev" {
 		w = zerolog.ConsoleWriter{
 			Out:        os.Stdout,
@@ -343,7 +350,7 @@ func init() {
 		if err != nil {
 			panic(err)
 		}
-		level = zerolog.DebugLevel
+		level = zerolog.InfoLevel
 	}
 	log = zerolog.New(w).Level(level)
 
