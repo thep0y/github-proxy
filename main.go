@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-01-30 16:28:20
+ * @Modified At: 2023-01-30 19:06:08
  * @Modified By: thepoy
  */
 
@@ -86,6 +86,10 @@ var (
 	clientPool sync.Pool
 )
 
+func disableRedirect(req *http.Request, via []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
 func acquireClient() *http.Client {
 	log.Trace().Msg("Acquire a client")
 
@@ -95,7 +99,8 @@ func acquireClient() *http.Client {
 	}
 
 	return &http.Client{
-		Transport: &transport,
+		Transport:     &transport,
+		CheckRedirect: disableRedirect,
 	}
 }
 
@@ -128,7 +133,9 @@ func convertHeader(src *fasthttp.RequestHeader) http.Header {
 	header := make(http.Header)
 
 	src.VisitAll(func(key, value []byte) {
-		header[string(key)] = append(header[string(key)], string(value))
+		if string(key) != "Host" {
+			header[string(key)] = append(header[string(key)], string(value))
+		}
 	})
 
 	return header
@@ -215,15 +222,8 @@ func proxy(c *fiber.Ctx, u string) error {
 		for k, v := range req.Header {
 			fields[k] = v
 		}
-		log.Debug().Fields(fields).Msg("Request headers")
+		log.Debug().Str("method", req.Method).Dict("headers", zerolog.Dict().Fields(fields)).Msg("Request info")
 	}
-
-	c.Request().Header.VisitAll(func(key, value []byte) {
-		k := string(key)
-		if k != "Host" {
-			req.Header.Set(k, string(value))
-		}
-	})
 
 	log.Trace().Msg("Send a request")
 
@@ -242,9 +242,19 @@ func proxy(c *fiber.Ctx, u string) error {
 		return err
 	}
 
-	log.Trace().Msg("Got a response")
+	if env == "dev" {
+		fields := make(map[string]interface{})
+		for k, v := range resp.Header {
+			fields[k] = v
+		}
+		log.Debug().
+			Int("status-code", resp.StatusCode).
+			Dict("headers", zerolog.Dict().Fields(fields)).
+			Msg("Got a response")
+	}
 
 	response := c.Response()
+
 	switch resp.StatusCode {
 	case fiber.StatusOK:
 		var (
@@ -275,11 +285,21 @@ func proxy(c *fiber.Ctx, u string) error {
 
 		return nil
 	case fiber.StatusFound:
-		return proxy(c, resp.Header.Get("Location"))
+		c.Status(fiber.StatusFound)
+		response.Header.Set("Location", "/"+resp.Header.Get("Location"))
+
+		return nil
 	default:
 		c.Status(resp.StatusCode)
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+
 		log.Error().
-			Int("status-code", resp.StatusCode).
+			Bytes("body", body).
+			Interface("request-headers", resp.Request.Header).
 			Msg("响应错误")
 	}
 
@@ -287,7 +307,9 @@ func proxy(c *fiber.Ctx, u string) error {
 }
 
 func handler(c *fiber.Ctx) (err error) {
-	u := c.Params("+")
+	u := c.Params("*")
+
+	log.Debug().Str("url", u).Msg("URL in request")
 
 	if u[:4] != "http" {
 		u = "https://" + u
@@ -309,6 +331,12 @@ func handler(c *fiber.Ctx) (err error) {
 
 	if ptn2.MatchString(u) {
 		u = strings.Replace(u, "/blob/", "/raw/", 1)
+	}
+
+	// fiber 用路由匹配规则会过滤掉查询参数，需要手动添加
+	queryString := string(c.Request().URI().QueryString())
+	if queryString != "" {
+		u = u + "?" + queryString
 	}
 
 	err = proxy(c, u)
@@ -376,7 +404,7 @@ func main() {
 	// 	return c.SendString("Hello, World 👋!")
 	// })
 
-	app.All("/+", handler)
+	app.All("/*", handler)
 	// app.Get("/test/+", test)
 
 	app.Listen(":3000")

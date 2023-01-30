@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   logger.go
  * @Created At:  2023-01-20 11:22:51
- * @Modified At: 2023-01-28 19:35:27
+ * @Modified At: 2023-01-30 18:27:15
  * @Modified By: thepoy
  */
 
@@ -64,6 +64,12 @@ func New(config ...Config) fiber.Handler {
 		}
 
 		start := time.Now()
+
+		sublog.Info().
+			Str("url", c.Request().URI().String()).
+			Bytes("method", c.Request().Header.Method()).
+			Stringer("client", c.Context().RemoteIP()).
+			Msg("Requesting")
 
 		// Handle request, store err for logging
 		chainErr := c.Next()
