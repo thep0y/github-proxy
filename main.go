@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-01-30 19:06:08
+ * @Modified At: 2023-02-13 09:49:47
  * @Modified By: thepoy
  */
 
@@ -310,6 +310,13 @@ func handler(c *fiber.Ctx) (err error) {
 	u := c.Params("*")
 
 	log.Debug().Str("url", u).Msg("URL in request")
+
+	// 防止有人访问不存在文件，如 <HOST>/.env，长度小于等于 4 时会 panic
+	if len(u) <= 4 {
+		c.Status(fiber.StatusNotFound)
+
+		return
+	}
 
 	if u[:4] != "http" {
 		u = "https://" + u

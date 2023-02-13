@@ -13,6 +13,19 @@ go build -ldflags="-s -v" -o main main.go && upx -9 main
 
 用 upx 压缩能大幅缩小可执行文件体积，如果对程序的体积没有要求，可以不执行此步，因为使用 upx 压缩后在执行时会有一个用时很短的解压过程。
 
+如果你是用 Windows 作为开发平台，应逐行执行以下命令进行交叉编译：
+
+```powershell
+$Env:CGO_ENABLED=0
+$Env:GOOS='linux'
+$Env:GOARCH='amd64'
+go build -ldflags="-s -v" -o main main.go && upx -9 main
+```
+
+### upx
+
+下载对应系统的最新 [release](https://github.com/upx/upx/releases/latest) ，放到 PATH 中即可。
+
 ### 编译前端页面
 
 克隆同项目的的前端仓库，编译：
