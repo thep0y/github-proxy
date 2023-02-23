@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-02-23 15:41:16
+ * @Modified At: 2023-02-23 16:06:56
  * @Modified By: thepoy
  */
 
@@ -82,7 +82,14 @@ var (
 		Dial: dialTimeout,
 	}
 
-	clientPool sync.Pool
+	clientPool = &sync.Pool{
+		New: func() any {
+			client := new(http.Client)
+			client.Transport = &transport
+
+			return client
+		},
+	}
 )
 
 func disableRedirect(req *http.Request, via []*http.Request) error {
@@ -92,14 +99,7 @@ func disableRedirect(req *http.Request, via []*http.Request) error {
 func acquireClient() *http.Client {
 	log.Trace().Msg("Acquire a client")
 
-	client := clientPool.Get()
-	if client != nil {
-		return client.(*http.Client)
-	}
-
-	return &http.Client{
-		Transport: &transport,
-	}
+	return clientPool.Get().(*http.Client)
 }
 
 func releaseClient(client *http.Client) {
@@ -231,7 +231,6 @@ func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
 	log.Trace().Msg("Send a request")
 
 	// TODO: 响应池？
-	// TODO: 客户端中断请求后这里的请求也需要中断
 	resp, err := client.Do(req)
 	if err != nil {
 		if e, ok := err.(*url.Error); ok {
@@ -363,17 +362,6 @@ func handler(c *fiber.Ctx) (err error) {
 	return nil
 }
 
-// func test(c *fiber.Ctx) error {
-// 	url := c.Params("+")
-
-// 	err := proxy(c, url)
-// 	if err != nil {
-// 		return c.JSON(newErrorResponse(err))
-// 	}
-
-// 	return nil
-// }
-
 func init() {
 	var (
 		w     io.Writer
@@ -414,12 +402,7 @@ func main() {
 		MaxAge:        60 * 60 * 24 * 10,   // 缓存 10 天
 	})
 
-	// app.Get("/", func(c *fiber.Ctx) error {
-	// 	return c.SendString("Hello, World 👋!")
-	// })
-
 	app.All("/*", handler)
-	// app.Get("/test/+", test)
 
 	app.Listen(":3000")
 }
