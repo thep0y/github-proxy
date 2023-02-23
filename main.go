@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-02-13 09:49:47
+ * @Modified At: 2023-02-23 15:14:34
  * @Modified By: thepoy
  */
 
@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"github-proxy/middleware/logger"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -256,7 +255,7 @@ func proxy(c *fiber.Ctx, u string) error {
 	response := c.Response()
 
 	switch resp.StatusCode {
-	case fiber.StatusOK:
+	case fiber.StatusOK, fiber.StatusPartialContent:
 		var (
 			contentLength int64
 		)
@@ -281,6 +280,7 @@ func proxy(c *fiber.Ctx, u string) error {
 			}
 		}
 
+		c.Status(resp.StatusCode)
 		response.SetBodyStream(resp.Body, int(contentLength))
 
 		return nil
@@ -366,8 +366,6 @@ func handler(c *fiber.Ctx) (err error) {
 // }
 
 func init() {
-	rand.Seed(time.Now().UnixNano())
-
 	var (
 		w     io.Writer
 		level zerolog.Level
