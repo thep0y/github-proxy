@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-02-23 15:14:34
+ * @Modified At: 2023-02-23 15:41:16
  * @Modified By: thepoy
  */
 
@@ -98,8 +98,7 @@ func acquireClient() *http.Client {
 	}
 
 	return &http.Client{
-		Transport:     &transport,
-		CheckRedirect: disableRedirect,
+		Transport: &transport,
 	}
 }
 
@@ -193,7 +192,7 @@ func checkURL(u string) bool {
 	return false
 }
 
-func proxy(c *fiber.Ctx, u string) error {
+func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
 	switch c.Method() {
 	case fiber.MethodGet:
 		log.Info().Str("url", u).Msg("Downloading")
@@ -208,6 +207,11 @@ func proxy(c *fiber.Ctx, u string) error {
 	c.Request().Header.Del("Host")
 
 	client := acquireClient()
+
+	if !followRedirect {
+		client.CheckRedirect = disableRedirect
+	}
+
 	defer releaseClient(client)
 
 	req, err := acquireRequest(u, &c.Request().Header, c.Request().Body())
@@ -285,10 +289,15 @@ func proxy(c *fiber.Ctx, u string) error {
 
 		return nil
 	case fiber.StatusFound:
-		c.Status(fiber.StatusFound)
-		response.Header.Set("Location", "/"+resp.Header.Get("Location"))
+		location := resp.Header.Get("Location")
+		if checkURL(location) {
+			c.Status(fiber.StatusFound)
+			response.Header.Set("Location", "/"+resp.Header.Get("Location"))
 
-		return nil
+			return nil
+		}
+
+		return proxy(c, location, true)
 	default:
 		c.Status(resp.StatusCode)
 
@@ -346,7 +355,7 @@ func handler(c *fiber.Ctx) (err error) {
 		u = u + "?" + queryString
 	}
 
-	err = proxy(c, u)
+	err = proxy(c, u, false)
 	if err != nil {
 		return c.JSON(newErrorResponse(err))
 	}
