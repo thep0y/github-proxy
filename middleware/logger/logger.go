@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   logger.go
  * @Created At:  2023-01-20 11:22:51
- * @Modified At: 2023-01-30 18:27:15
+ * @Modified At: 2023-04-24 16:53:18
  * @Modified By: thepoy
  */
 
@@ -98,6 +98,8 @@ func New(config ...Config) fiber.Handler {
 		switch {
 		case code >= fiber.StatusBadRequest:
 			dumplogger.Err(fiber.NewError(code)).Send()
+		case code == fiber.StatusNotModified:
+			dumplogger.Info().Msg(utils.StatusMessage(code))
 		case code >= fiber.StatusMultipleChoices:
 			dumplogger.Warn().Msg(utils.StatusMessage(code))
 		case code >= fiber.StatusContinue:

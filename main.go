@@ -3,7 +3,7 @@
  * @Email:       thepoy@163.com
  * @File Name:   main.go
  * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-04-24 13:26:56
+ * @Modified At: 2023-04-24 16:49:15
  * @Modified By: thepoy
  */
 
@@ -160,13 +160,14 @@ func acquireRequest(u string, header *fasthttp.RequestHeader, body []byte) (*htt
 	}
 
 	return &http.Request{
-		Method:     string(header.Method()),
-		URL:        parsedURL,
+		Method: string(header.Method()),
+		URL:    parsedURL,
+		Header: convertHeader(header),
+		Body:   newBody(body),
+
 		Proto:      "HTTP/1.1",
 		ProtoMajor: 1,
 		ProtoMinor: 1,
-		Header:     convertHeader(header),
-		Body:       newBody(body),
 		Host:       parsedURL.Host,
 	}, nil
 }
@@ -193,8 +194,8 @@ func checkURL(u string) bool {
 	return false
 }
 
-func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
-	switch c.Method() {
+func handleMethod(u, method string) error {
+	switch method {
 	case fiber.MethodGet:
 		log.Info().Str("url", u).Msg("Downloading")
 	case fiber.MethodPost:
@@ -205,15 +206,113 @@ func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
 		return ErrMethod
 	}
 
-	c.Request().Header.Del("Host")
+	return nil
+}
 
-	client := acquireClient()
+func setResponseHeader(resp *fasthttp.Response, header http.Header) {
+	for key, values := range header {
+		for _, value := range values {
+			resp.Header.Set(key, value)
+		}
+	}
+}
 
-	if !followRedirect {
-		client.CheckRedirect = disableRedirect
+func handleGitResponse(c *fiber.Ctx, resp *http.Response, response *fasthttp.Response) error {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Err(err).Msg("Error reading response body")
+
+		c.Status(fiber.StatusBadRequest)
+
+		return err
+	}
+	defer resp.Body.Close()
+
+	setResponseHeader(response, resp.Header)
+
+	log.Debug().Bytes("response body", body).Send()
+
+	response.SetBody(body)
+
+	c.Status(resp.StatusCode)
+
+	return nil
+}
+
+func handleDownloadResponse(c *fiber.Ctx, u string, resp *http.Response, response *fasthttp.Response) error {
+	var (
+		err           error
+		contentLength int64
+	)
+
+	contentLengthStr := resp.Header.Get("Content-Length")
+
+	if contentLengthStr != "" {
+		contentLength, err = strconv.ParseInt(resp.Header.Get("Content-Length"), 0, 64)
+		if err != nil {
+			log.Err(err).Msg("Failed to read Content-Length from response header")
+			return err
+		}
 	}
 
-	defer releaseClient(client)
+	fileSize := float64(contentLength) / 1024 / 1024
+
+	log.Info().Str("src", u).Str("size", fmt.Sprintf("%.2fM", fileSize)).Msg("File info")
+
+	// TODO: 以后可以给捐赠用户开放此限制
+	if contentLength > MAX_SIZE {
+		c.Status(fiber.StatusForbidden)
+		return &OverLimit{fileSize}
+	}
+
+	setResponseHeader(response, resp.Header)
+
+	response.SetBodyStream(resp.Body, int(contentLength))
+
+	c.Status(resp.StatusCode)
+
+	return nil
+}
+
+func handleResponseError(c *fiber.Ctx, err error) error {
+	if e, ok := err.(*url.Error); ok {
+		if e.Timeout() {
+			c.Status(fiber.StatusGatewayTimeout)
+			return ErrTimeout
+		}
+	}
+
+	c.Status(fiber.StatusInternalServerError)
+	return err
+}
+
+func handleInvalidResponse(c *fiber.Ctx, resp *http.Response) error {
+	c.Status(resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Interface("request-headers", resp.Request.Header).
+			Msg("响应错误")
+		return err
+	}
+
+	log.Error().
+		Bytes("body", body).
+		Interface("request-headers", resp.Request.Header).
+		Msg("响应错误")
+
+	return nil
+}
+
+func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
+	err := handleMethod(u, c.Method())
+	if err != nil {
+		return err
+	}
+
+	c.Request().Header.Del("Host")
 
 	req, err := acquireRequest(u, &c.Request().Header, c.Request().Body())
 	if err != nil {
@@ -229,20 +328,17 @@ func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
 		log.Debug().Str("method", req.Method).Dict("headers", zerolog.Dict().Fields(fields)).Msg("Request info")
 	}
 
-	log.Trace().Msg("Send a request")
+	client := &http.Client{}
 
-	// TODO: 响应池？
+	if !followRedirect {
+		client.CheckRedirect = disableRedirect
+	}
+
+	log.Trace().Msg("Sending request")
+
 	resp, err := client.Do(req)
 	if err != nil {
-		if e, ok := err.(*url.Error); ok {
-			if e.Timeout() {
-				c.Status(fiber.StatusGatewayTimeout)
-				return ErrTimeout
-			}
-		}
-
-		c.Status(fiber.StatusInternalServerError)
-		return err
+		return handleResponseError(c, err)
 	}
 
 	if env == "dev" {
@@ -260,34 +356,11 @@ func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
 
 	switch resp.StatusCode {
 	case fiber.StatusOK, fiber.StatusPartialContent:
-		var (
-			contentLength int64
-		)
-		contentLength, err = strconv.ParseInt(resp.Header.Get("Content-Length"), 0, 64)
-		if err != nil {
-			return err
+		if env == "dev" || req.Header.Get("User-Agent")[:3] == "git" {
+			return handleGitResponse(c, resp, response)
 		}
 
-		fileSize := float64(contentLength) / 1024 / 1024
-
-		log.Info().Str("src", u).Str("size", fmt.Sprintf("%.2fM", fileSize)).Msg("File info")
-
-		// TODO: 以后可以给捐赠用户开放此限制
-		if contentLength > MAX_SIZE {
-			c.Status(fiber.StatusForbidden)
-			return &OverLimit{fileSize}
-		}
-
-		for key, values := range resp.Header {
-			for _, value := range values {
-				response.Header.Set(key, value)
-			}
-		}
-
-		c.Status(resp.StatusCode)
-		response.SetBodyStream(resp.Body, int(contentLength))
-
-		return nil
+		return handleDownloadResponse(c, u, resp, response)
 	case fiber.StatusFound:
 		location := resp.Header.Get("Location")
 		if checkURL(location) {
@@ -298,21 +371,14 @@ func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
 		}
 
 		return proxy(c, location, true)
+	case fiber.StatusNotModified:
+		setResponseHeader(response, resp.Header)
+		c.Response().SetStatusCode(resp.StatusCode)
+
+		return nil
 	default:
-		c.Status(resp.StatusCode)
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return err
-		}
-
-		log.Error().
-			Bytes("body", body).
-			Interface("request-headers", resp.Request.Header).
-			Msg("响应错误")
+		return handleInvalidResponse(c, resp)
 	}
-
-	return nil
 }
 
 func handler(c *fiber.Ctx) (err error) {
