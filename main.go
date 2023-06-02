@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-contrib/gzip"
 	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
@@ -449,7 +448,6 @@ func main() {
 	r := gin.Default()
 
 	r.Use(
-		gzip.Gzip(gzip.DefaultCompression),
 		static.Serve("/", static.LocalFile("../caddy/static", false)),
 	)
 
