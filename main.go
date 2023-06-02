@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 
@@ -218,7 +219,12 @@ func handleResponse(c *gin.Context, resp *http.Response) error {
 	contentLength := resp.ContentLength
 	contentType := resp.Header.Get("Content-Type")
 
-	c.DataFromReader(resp.StatusCode, contentLength, contentType, reader, nil)
+	headers := make(map[string]string)
+	for k, v := range resp.Header {
+		headers[k] = strings.Join(v, ", ")
+	}
+
+	c.DataFromReader(resp.StatusCode, contentLength, contentType, reader, headers)
 
 	return nil
 }
@@ -405,6 +411,10 @@ func handler(c *gin.Context) {
 	return
 }
 
+func index(c *gin.Context) {
+	c.HTML(http.StatusOK, "./static/index.html", nil)
+}
+
 func init() {
 	var (
 		w     io.Writer
@@ -436,6 +446,8 @@ func init() {
 
 func main() {
 	r := gin.Default()
+
+	r.Use(static.Serve("/", static.LocalFile("./static", false)))
 
 	r.Any("/*target", handler)
 
