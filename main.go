@@ -1,33 +1,23 @@
-/**
- * @Author:      thepoy
- * @Email:       thepoy@163.com
- * @File Name:   main.go
- * @Created At:  2023-01-12 10:26:09
- * @Modified At: 2023-04-24 16:49:15
- * @Modified By: thepoy
- */
-
 package main
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github-proxy/middleware/logger"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
-	"github.com/valyala/fasthttp"
+
+	"github-proxy/middleware/logger"
 )
 
 const (
@@ -38,11 +28,21 @@ const (
 )
 
 var (
-	ptn1 = regexp.MustCompile(`^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:releases|archive)/.*$`)
-	ptn2 = regexp.MustCompile(`^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:blob|raw)/.*$`)
-	ptn3 = regexp.MustCompile(`^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:info|git-).*$`)
-	ptn4 = regexp.MustCompile(`^(?:https?://)?raw\.(?:githubusercontent|github)\.com/(?P<author>.+?)/(?P<repo>.+?)/.+?/.+$`)
-	ptn5 = regexp.MustCompile(`^(?:https?://)?gist\.(?:githubusercontent|github)\.com/(?P<author>.+?)/.+?/.+$`)
+	ptn1 = regexp.MustCompile(
+		`^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:releases|archive)/.*$`,
+	)
+	ptn2 = regexp.MustCompile(
+		`^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:blob|raw)/.*$`,
+	)
+	ptn3 = regexp.MustCompile(
+		`^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:info|git-).*$`,
+	)
+	ptn4 = regexp.MustCompile(
+		`^(?:https?://)?raw\.(?:githubusercontent|github)\.com/(?P<author>.+?)/(?P<repo>.+?)/.+?/.+$`,
+	)
+	ptn5 = regexp.MustCompile(
+		`^(?:https?://)?gist\.(?:githubusercontent|github)\.com/(?P<author>.+?)/.+?/.+$`,
+	)
 	ptn6 = regexp.MustCompile(`^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)(\.git)/.+$`)
 
 	regexps = [6]*regexp.Regexp{ptn1, ptn2, ptn3, ptn4, ptn5, ptn6}
@@ -124,23 +124,27 @@ func newBody(body []byte) io.ReadCloser {
 	return io.NopCloser(bodyBuffer)
 }
 
-func convertHeader(src *fasthttp.RequestHeader) http.Header {
+func convertHeader(src http.Header) http.Header {
 	if src == nil {
 		return nil
 	}
 
 	header := make(http.Header)
 
-	src.VisitAll(func(key, value []byte) {
-		if string(key) != "Host" {
-			header[string(key)] = append(header[string(key)], string(value))
+	for key, value := range src {
+		if key != "Host" {
+			header[key] = value
 		}
-	})
+	}
 
 	return header
 }
 
-func acquireRequest(u string, header *fasthttp.RequestHeader, body []byte) (*http.Request, error) {
+func acquireRequest(
+	method, u string,
+	header http.Header,
+	body io.ReadCloser,
+) (*http.Request, error) {
 	log.Trace().Msg("Acquire a request")
 
 	parsedURL, err := url.Parse(u)
@@ -151,19 +155,19 @@ func acquireRequest(u string, header *fasthttp.RequestHeader, body []byte) (*htt
 	req := requestPool.Get()
 	if req != nil {
 		r := req.(*http.Request)
-		r.Method = string(header.Method())
+		r.Method = method
 		r.URL = parsedURL
 		r.Header = convertHeader(header)
-		r.Body = newBody(body)
+		r.Body = body
 
 		return r, nil
 	}
 
 	return &http.Request{
-		Method: string(header.Method()),
+		Method: method,
 		URL:    parsedURL,
 		Header: convertHeader(header),
-		Body:   newBody(body),
+		Body:   body,
 
 		Proto:      "HTTP/1.1",
 		ProtoMajor: 1,
@@ -196,9 +200,9 @@ func checkURL(u string) bool {
 
 func handleMethod(u, method string) error {
 	switch method {
-	case fiber.MethodGet:
+	case http.MethodGet:
 		log.Info().Str("url", u).Msg("Downloading")
-	case fiber.MethodPost:
+	case http.MethodPost:
 		log.Info().Str("url", u).Msg("Pushing")
 	default:
 		log.Error().Msg("Invalid method")
@@ -209,51 +213,22 @@ func handleMethod(u, method string) error {
 	return nil
 }
 
-func setResponseHeader(resp *fasthttp.Response, header http.Header) {
-	for key, values := range header {
-		for _, value := range values {
-			resp.Header.Set(key, value)
-		}
-	}
-}
+func handleResponse(c *gin.Context, resp *http.Response) error {
+	reader := resp.Body
+	contentLength := resp.ContentLength
+	contentType := resp.Header.Get("Content-Type")
 
-func handleGitResponse(c *fiber.Ctx, resp *http.Response, response *fasthttp.Response) error {
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Err(err).Msg("Error reading response body")
-
-		c.Status(fiber.StatusBadRequest)
-
-		return err
-	}
-	defer resp.Body.Close()
-
-	setResponseHeader(response, resp.Header)
-
-	log.Debug().Bytes("response body", body).Send()
-
-	response.SetBody(body)
-
-	c.Status(resp.StatusCode)
+	c.DataFromReader(resp.StatusCode, contentLength, contentType, reader, nil)
 
 	return nil
 }
 
-func handleDownloadResponse(c *fiber.Ctx, u string, resp *http.Response, response *fasthttp.Response) error {
-	var (
-		err           error
-		contentLength int64
-	)
-
-	contentLengthStr := resp.Header.Get("Content-Length")
-
-	if contentLengthStr != "" {
-		contentLength, err = strconv.ParseInt(resp.Header.Get("Content-Length"), 0, 64)
-		if err != nil {
-			log.Err(err).Msg("Failed to read Content-Length from response header")
-			return err
-		}
-	}
+func handleDownloadResponse(
+	c *gin.Context,
+	u string,
+	resp *http.Response,
+) error {
+	contentLength := resp.ContentLength
 
 	fileSize := float64(contentLength) / 1024 / 1024
 
@@ -261,32 +236,28 @@ func handleDownloadResponse(c *fiber.Ctx, u string, resp *http.Response, respons
 
 	// TODO: 以后可以给捐赠用户开放此限制
 	if contentLength > MAX_SIZE {
-		c.Status(fiber.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return &OverLimit{fileSize}
 	}
 
-	setResponseHeader(response, resp.Header)
-
-	response.SetBodyStream(resp.Body, int(contentLength))
-
-	c.Status(resp.StatusCode)
+	handleResponse(c, resp)
 
 	return nil
 }
 
-func handleResponseError(c *fiber.Ctx, err error) error {
+func handleResponseError(c *gin.Context, err error) error {
 	if e, ok := err.(*url.Error); ok {
 		if e.Timeout() {
-			c.Status(fiber.StatusGatewayTimeout)
+			c.Status(http.StatusGatewayTimeout)
 			return ErrTimeout
 		}
 	}
 
-	c.Status(fiber.StatusInternalServerError)
+	c.Status(http.StatusInternalServerError)
 	return err
 }
 
-func handleInvalidResponse(c *fiber.Ctx, resp *http.Response) error {
+func handleInvalidResponse(c *gin.Context, resp *http.Response) error {
 	c.Status(resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
@@ -306,15 +277,15 @@ func handleInvalidResponse(c *fiber.Ctx, resp *http.Response) error {
 	return nil
 }
 
-func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
-	err := handleMethod(u, c.Method())
+func proxy(c *gin.Context, u string, followRedirect bool) error {
+	err := handleMethod(u, c.Request.Method)
 	if err != nil {
 		return err
 	}
 
-	c.Request().Header.Del("Host")
+	c.Request.Header.Del("Host")
 
-	req, err := acquireRequest(u, &c.Request().Header, c.Request().Body())
+	req, err := acquireRequest(c.Request.Method, u, c.Request.Header, c.Request.Body)
 	if err != nil {
 		return err
 	}
@@ -325,10 +296,13 @@ func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
 		for k, v := range req.Header {
 			fields[k] = v
 		}
-		log.Debug().Str("method", req.Method).Dict("headers", zerolog.Dict().Fields(fields)).Msg("Request info")
+		log.Debug().
+			Str("method", req.Method).
+			Dict("headers", zerolog.Dict().Fields(fields)).
+			Msg("Request info")
 	}
 
-	client := &http.Client{}
+	client := acquireClient()
 
 	if !followRedirect {
 		client.CheckRedirect = disableRedirect
@@ -352,28 +326,25 @@ func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
 			Msg("Got a response")
 	}
 
-	response := c.Response()
-
 	switch resp.StatusCode {
-	case fiber.StatusOK, fiber.StatusPartialContent:
+	case http.StatusOK, http.StatusPartialContent:
 		if env == "dev" || req.Header.Get("User-Agent")[:3] == "git" {
-			return handleGitResponse(c, resp, response)
+			return handleResponse(c, resp)
 		}
 
-		return handleDownloadResponse(c, u, resp, response)
-	case fiber.StatusFound:
+		return handleDownloadResponse(c, u, resp)
+	case http.StatusFound:
 		location := resp.Header.Get("Location")
 		if checkURL(location) {
-			c.Status(fiber.StatusFound)
-			response.Header.Set("Location", "/"+resp.Header.Get("Location"))
+			c.Status(http.StatusFound)
+			c.Header("Location", "/"+resp.Header.Get("Location"))
 
 			return nil
 		}
 
 		return proxy(c, location, true)
-	case fiber.StatusNotModified:
-		setResponseHeader(response, resp.Header)
-		c.Response().SetStatusCode(resp.StatusCode)
+	case http.StatusNotModified:
+		c.Status(resp.StatusCode)
 
 		return nil
 	default:
@@ -381,32 +352,37 @@ func proxy(c *fiber.Ctx, u string, followRedirect bool) error {
 	}
 }
 
-func handler(c *fiber.Ctx) (err error) {
-	u := c.Params("*")
+func handler(c *gin.Context) {
+	u := c.Param("target")
 
 	log.Debug().Str("url", u).Msg("URL in request")
 
 	// 防止有人访问不存在文件，如 <HOST>/.env，长度小于等于 4 时会 panic
 	if len(u) <= 4 {
-		c.Status(fiber.StatusNotFound)
+		c.Status(http.StatusNotFound)
 
 		return
 	}
 
-	if u[:4] != "http" {
-		u = "https://" + u
+	if u[:5] != "/http" {
+		u = "https:/" + u
+	} else {
+		u = u[1:]
 	}
 
-	u, err = url.QueryUnescape(u)
+	u, err := url.QueryUnescape(u)
 	if err != nil {
+		c.Status(http.StatusBadRequest)
+
 		return
 	}
 
 	log.Debug().Str("url", u).Msg("Got a request from client")
 
 	if !checkURL(u) {
-		c.Status(fiber.StatusBadRequest)
-		return c.JSON(newErrorResponse(ErrInvalidInput))
+		c.JSON(http.StatusBadRequest, newErrorResponse(ErrInvalidInput))
+
+		return
 	}
 
 	log.Trace().Msg("Url is valid")
@@ -415,18 +391,18 @@ func handler(c *fiber.Ctx) (err error) {
 		u = strings.Replace(u, "/blob/", "/raw/", 1)
 	}
 
-	// fiber 用路由匹配规则会过滤掉查询参数，需要手动添加
-	queryString := string(c.Request().URI().QueryString())
+	// http.用路由匹配规则会过滤掉查询参数，需要手动添加
+	queryString := string(c.Request.URL.RawQuery)
 	if queryString != "" {
 		u = u + "?" + queryString
 	}
 
 	err = proxy(c, u, false)
 	if err != nil {
-		return c.JSON(newErrorResponse(err))
+		return
 	}
 
-	return nil
+	return
 }
 
 func init() {
@@ -459,17 +435,9 @@ func init() {
 }
 
 func main() {
-	app := fiber.New()
-	app.Use(logger.New(logger.Config{Logger: &log}))
-	app.Static("/", "./static", fiber.Static{
-		Compress:      true,
-		ByteRange:     true,
-		Browse:        true,
-		CacheDuration: 10 * time.Hour * 24, // 缓存 10 天
-		MaxAge:        60 * 60 * 24 * 10,   // 缓存 10 天
-	})
+	r := gin.Default()
 
-	app.All("/*", handler)
+	r.Any("/*target", handler)
 
-	app.Listen(":3000")
+	r.Run(":3000")
 }
