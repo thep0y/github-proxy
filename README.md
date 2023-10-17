@@ -34,16 +34,12 @@ go build -ldflags="-s -v" -o main main.go && upx -9 main
 
 ```bash
 # 根据使用的包管理器选择对应的命令
-pnpm run build
+pnpm build
 yarn build
 npm run build
 ```
 
-将编译好的文件复制到后端根目录的`static`目录中：
-
-```bash
-cp -r dist <后端目录>/static
-```
+将编译好的文件复制到任意目录(最好叫`static`)中，然后修改`main.go`中的`"../caddy/static"`为前端文件目录。
 
 ### 测试运行
 
@@ -68,3 +64,7 @@ caddy 配置文件：
 
 reverse_proxy localhost:3000
 ```
+
+## 相关项目
+
+- [gh-proxy](https://github.com/hunshcn/gh-proxy)
