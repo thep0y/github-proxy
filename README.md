@@ -28,18 +28,15 @@ go build -ldflags="-s -v" -o main main.go && upx -9 main
 
 下载对应系统的最新 [release](https://github.com/upx/upx/releases/latest) ，放到 PATH 中即可。
 
-### 编译前端页面
+### 配置前端页面
 
-克隆同项目的的前端仓库，编译：
+如果你不会自己写前端页面可使用我打包的页面，但里面有两张捐赠图片，你可以选择删除或替换。
 
-```bash
-# 根据使用的包管理器选择对应的命令
-pnpm build
-yarn build
-npm run build
-```
+已打包的前端页面：
 
-将编译好的文件复制到任意目录(最好叫`static`)中，然后修改`main.go`中的`"../caddy/static"`为前端文件目录。
+https://pan.baidu.com/s/14iEOGT9xSAR1EUXTpoO01g 提取码: xvme
+
+将前端文件解压后放到任意目录(最好叫`static`)中，然后修改`main.go`中的`"../caddy/static"`为前端文件目录。
 
 ### 测试运行
 
