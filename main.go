@@ -8,10 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-contrib/static"
@@ -22,7 +20,7 @@ import (
 )
 
 const (
-	// 免费用户单个文件允许代理的最大体积 200 M
+	// 单个文件允许代理的最大体积 200 M，可根据实际需求修改
 	MAX_SIZE = 200 * 1024 * 1024
 
 	TIMEOUT = 10 * time.Second
@@ -48,9 +46,11 @@ var (
 
 	regexps = [6]*regexp.Regexp{ptn1, ptn2, ptn3, ptn4, ptn5, ptn6}
 
-	log zerolog.Logger
+	log = logger.GetLogger()
 
-	env = os.Getenv("GP_ENV")
+	env = logger.GetEnv()
+
+	client = new(http.Client)
 )
 
 type OverLimit struct {
@@ -58,7 +58,7 @@ type OverLimit struct {
 }
 
 func (ol *OverLimit) Error() string {
-	return fmt.Sprintf("文件体积超限: %.2fM > 200M", ol.size)
+	return fmt.Sprintf("文件体积超限: %.2fM > %dM", ol.size, MAX_SIZE/1024/1024)
 }
 
 var (
@@ -79,42 +79,15 @@ func dialTimeout(network, addr string) (net.Conn, error) {
 	return net.DialTimeout(network, addr, TIMEOUT)
 }
 
-var (
-	transport = http.Transport{
-		Dial: dialTimeout,
-	}
-
-	clientPool = &sync.Pool{
-		New: func() any {
-			client := new(http.Client)
-			client.Transport = &transport
-
-			return client
-		},
-	}
-)
+var transport = http.Transport{
+	Dial:                dialTimeout,
+	MaxIdleConns:        100,
+	MaxIdleConnsPerHost: 100,
+}
 
 func disableRedirect(req *http.Request, via []*http.Request) error {
 	return http.ErrUseLastResponse
 }
-
-func acquireClient() *http.Client {
-	log.Trace().Msg("Acquire a client")
-
-	return clientPool.Get().(*http.Client)
-}
-
-func releaseClient(client *http.Client) {
-	client.CheckRedirect = nil
-	client.Jar = nil
-	client.Transport = &transport
-
-	clientPool.Put(client)
-
-	log.Trace().Msg("Release a client")
-}
-
-var requestPool sync.Pool
 
 func newBody(body []byte) io.ReadCloser {
 	if body == nil {
@@ -141,54 +114,6 @@ func convertHeader(src http.Header) http.Header {
 	return header
 }
 
-func acquireRequest(
-	method, u string,
-	header http.Header,
-	body io.ReadCloser,
-) (*http.Request, error) {
-	log.Trace().Msg("Acquire a request")
-
-	parsedURL, err := url.Parse(u)
-	if err != nil {
-		return nil, err
-	}
-
-	req := requestPool.Get()
-	if req != nil {
-		r := req.(*http.Request)
-		r.Method = method
-		r.URL = parsedURL
-		r.Header = convertHeader(header)
-		r.Body = body
-
-		return r, nil
-	}
-
-	return &http.Request{
-		Method: method,
-		URL:    parsedURL,
-		Header: convertHeader(header),
-		Body:   body,
-
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Host:       parsedURL.Host,
-	}, nil
-}
-
-func releaseRequest(req *http.Request) {
-	req.Method = ""
-	req.URL = nil
-	req.Header = make(http.Header)
-	req.Host = ""
-	req.Body = nil
-
-	requestPool.Put(req)
-
-	log.Trace().Msg("Release a request")
-}
-
 func checkURL(u string) bool {
 	for _, e := range regexps {
 		if e.MatchString(u) {
@@ -206,7 +131,7 @@ func handleMethod(u, method string) error {
 	case http.MethodPost:
 		log.Info().Str("url", u).Msg("Pushing")
 	default:
-		log.Error().Msg("Invalid method")
+		log.Error().Str("method", method).Str("url", u).Msg("Invalid method")
 
 		return ErrMethod
 	}
@@ -214,8 +139,10 @@ func handleMethod(u, method string) error {
 	return nil
 }
 
-func handleResponse(c *gin.Context, resp *http.Response) error {
+func handleResponse(c *gin.Context, resp *http.Response) {
 	reader := resp.Body
+	defer reader.Close()
+
 	contentLength := resp.ContentLength
 	contentType := resp.Header.Get("Content-Type")
 
@@ -225,8 +152,6 @@ func handleResponse(c *gin.Context, resp *http.Response) error {
 	}
 
 	c.DataFromReader(resp.StatusCode, contentLength, contentType, reader, headers)
-
-	return nil
 }
 
 func handleDownloadResponse(
@@ -240,7 +165,7 @@ func handleDownloadResponse(
 
 	log.Info().Str("src", u).Str("size", fmt.Sprintf("%.2fM", fileSize)).Msg("File info")
 
-	// TODO: 以后可以给捐赠用户开放此限制
+	// 根据实际情况可以解除此限制
 	if contentLength > MAX_SIZE {
 		c.Status(http.StatusForbidden)
 		return &OverLimit{fileSize}
@@ -259,8 +184,28 @@ func handleResponseError(c *gin.Context, err error) error {
 		}
 	}
 
-	c.Status(http.StatusInternalServerError)
+	if errors.Is(err, &OverLimit{}) {
+		c.Status(http.StatusForbidden)
+	} else {
+		c.Status(http.StatusInternalServerError)
+	}
+
+	log.Error().
+		Err(err).
+		Msg("处理响应错误")
+
 	return err
+}
+
+func newRequest(method, url string, header http.Header, body io.ReadCloser) (*http.Request, error) {
+	req, error := http.NewRequest(method, url, body)
+	if error != nil {
+		return nil, error
+	}
+
+	req.Header = convertHeader(header)
+
+	return req, nil
 }
 
 func handleInvalidResponse(c *gin.Context, resp *http.Response) error {
@@ -291,11 +236,10 @@ func proxy(c *gin.Context, u string, followRedirect bool) error {
 
 	c.Request.Header.Del("Host")
 
-	req, err := acquireRequest(c.Request.Method, u, c.Request.Header, c.Request.Body)
+	req, err := newRequest(c.Request.Method, u, c.Request.Header, c.Request.Body)
 	if err != nil {
 		return err
 	}
-	defer releaseRequest(req)
 
 	if env == "dev" {
 		fields := make(map[string]interface{})
@@ -307,8 +251,6 @@ func proxy(c *gin.Context, u string, followRedirect bool) error {
 			Dict("headers", zerolog.Dict().Fields(fields)).
 			Msg("Request info")
 	}
-
-	client := acquireClient()
 
 	if !followRedirect {
 		client.CheckRedirect = disableRedirect
@@ -335,7 +277,9 @@ func proxy(c *gin.Context, u string, followRedirect bool) error {
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusPartialContent:
 		if env == "dev" || req.Header.Get("User-Agent")[:3] == "git" {
-			return handleResponse(c, resp)
+			handleResponse(c, resp)
+
+			return nil
 		}
 
 		return handleDownloadResponse(c, u, resp)
@@ -385,13 +329,13 @@ func handler(c *gin.Context) {
 
 	log.Debug().Str("url", u).Msg("Got a request from client")
 
-	if !checkURL(u) {
+	switch {
+	case checkURL(u):
+		log.Trace().Msg("URL 有效")
+	default:
 		c.JSON(http.StatusBadRequest, newErrorResponse(ErrInvalidInput))
-
 		return
 	}
-
-	log.Trace().Msg("Url is valid")
 
 	if ptn2.MatchString(u) {
 		u = strings.Replace(u, "/blob/", "/raw/", 1)
@@ -415,38 +359,10 @@ func index(c *gin.Context) {
 	c.HTML(http.StatusOK, "./static/index.html", nil)
 }
 
-func init() {
-	var (
-		w     io.Writer
-		level zerolog.Level
-		err   error
-	)
-
-	if env == "dev" {
-		w = zerolog.ConsoleWriter{
-			Out:        os.Stdout,
-			TimeFormat: logger.TimeFormat,
-		}
-		level = zerolog.TraceLevel
-	} else {
-		w, err = os.OpenFile("proxy.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
-		if err != nil {
-			panic(err)
-		}
-		level = zerolog.InfoLevel
-	}
-	log = zerolog.New(w).Level(level)
-
-	zerolog.TimeFieldFormat = logger.TimeFormat
-	log = log.With().
-		CallerWithSkipFrameCount(2).
-		Timestamp().
-		Logger()
-}
-
 func main() {
 	r := gin.Default()
 
+	// 传入包含 index.html 的静态文件路径
 	r.Use(
 		static.Serve("/", static.LocalFile("../caddy/static", false)),
 	)
