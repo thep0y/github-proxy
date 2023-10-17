@@ -2,6 +2,8 @@
 
 代理服务。
 
+这只是后端服务，前端页面需要自己完成并通过静态文件导入。
+
 ## 编译后端服务
 
 ```bash
@@ -47,7 +49,7 @@ cp -r dist <后端目录>/static
 
 在后端根目录中执行：
 
-```
+```bash
 ./main
 ```
 
@@ -61,9 +63,8 @@ cp -r dist <后端目录>/static
 
 caddy 配置文件：
 
-```
+```caddy
 <域名> # 如 example.com
 
 reverse_proxy localhost:3000
 ```
-
