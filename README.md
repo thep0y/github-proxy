@@ -4,6 +4,28 @@
 
 这只是后端服务，前端页面需要自己完成并通过静态文件导入。
 
+## 使用
+
+你可以直接在 release 中下载对应的服务器架构的可执行二进制文件，下载后可重命名为`gp`：
+
+```bash
+mv gp_* gp
+```
+
+命令行使用帮助：
+
+```bash
+使用指定的静态文件启动 github proxy 代理服务
+
+Usage:
+  gp [STATIC_DIR] [flags]
+
+Flags:
+  -h, --help          help for gp
+      --host string   本服务使用的主机 (default "localhost")
+      --port uint     本服务使用的端口 (default 3000)
+```
+
 ## 编译后端服务
 
 ```bash
