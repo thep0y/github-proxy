@@ -50,7 +50,9 @@ var (
 
 	env = logger.GetEnv()
 
-	client = new(http.Client)
+	client = &http.Client{
+		Timeout: TIMEOUT,
+	}
 )
 
 type OverLimit struct {
@@ -140,8 +142,7 @@ func handleMethod(u, method string) error {
 }
 
 func handleResponse(c *gin.Context, resp *http.Response) {
-	reader := resp.Body
-	defer reader.Close()
+	defer resp.Body.Close()
 
 	contentLength := resp.ContentLength
 	contentType := resp.Header.Get("Content-Type")
@@ -151,7 +152,7 @@ func handleResponse(c *gin.Context, resp *http.Response) {
 		headers[k] = strings.Join(v, ", ")
 	}
 
-	c.DataFromReader(resp.StatusCode, contentLength, contentType, reader, headers)
+	c.DataFromReader(resp.StatusCode, contentLength, contentType, resp.Body, headers)
 }
 
 func handleDownloadResponse(
@@ -229,9 +230,8 @@ func handleInvalidResponse(c *gin.Context, resp *http.Response) error {
 }
 
 func proxy(c *gin.Context, u string, followRedirect bool) error {
-	err := handleMethod(u, c.Request.Method)
-	if err != nil {
-		return err
+	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodPost {
+		return ErrMethod
 	}
 
 	c.Request.Header.Del("Host")
@@ -327,12 +327,9 @@ func handler(c *gin.Context) {
 		return
 	}
 
-	log.Debug().Str("url", u).Msg("Got a request from client")
+	log.Debug().Str("url", u).Msg("Got a request from remote")
 
-	switch {
-	case checkURL(u):
-		log.Trace().Msg("URL 有效")
-	default:
+	if !checkURL(u) {
 		c.JSON(http.StatusBadRequest, newErrorResponse(ErrInvalidInput))
 		return
 	}
