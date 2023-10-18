@@ -28,6 +28,8 @@ Flags:
 
 ## 编译后端服务
 
+如果 release 中没有你正在使用的平台或者你想使用最新的代码可自行编译本项目。
+
 ```bash
 go build -ldflags="-s -w" -o gp main.go && upx -9 main
 ```
