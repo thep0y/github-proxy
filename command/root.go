@@ -2,6 +2,7 @@ package command
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path"
 
@@ -18,6 +19,13 @@ var (
 	port uint
 )
 
+var (
+	ErrStaticDirNotFound    = errors.New("静态文件目录不存在")
+	ErrIndexHTMLNotFound    = errors.New("index.html 不存在")
+	ErrMissingStaticDir     = errors.New("缺少静态文件目录")
+	ErrOnlyOnePositionalArg = errors.New("只允许传入一个位置参数")
+)
+
 func isPathExists(path string) bool {
 	_, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -28,12 +36,12 @@ func isPathExists(path string) bool {
 
 func checkStatic(staticDir string) error {
 	if !isPathExists(staticDir) {
-		return errors.New("静态文件目录不存在")
+		return ErrStaticDirNotFound
 	}
 
 	index := path.Join(staticDir, "index.html")
 	if !isPathExists(index) {
-		return errors.New("index.html 不存在")
+		return ErrIndexHTMLNotFound
 	}
 
 	return nil
@@ -43,8 +51,13 @@ var rootCmd = &cobra.Command{
 	Use:   "gp [STATIC_DIR]",
 	Short: "使用指定的静态文件启动 github proxy 代理服务",
 	Args: func(_ *cobra.Command, args []string) error {
-		if len(args) != 1 {
-			return errors.New("缺少静态文件目录")
+		argsLen := len(args)
+		if argsLen == 0 {
+			return ErrMissingStaticDir
+		}
+
+		if argsLen > 1 {
+			return fmt.Errorf("%w，你传入了 %d 个", ErrOnlyOnePositionalArg, argsLen)
 		}
 
 		return checkStatic(args[0])
