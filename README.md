@@ -78,6 +78,14 @@ https://pan.baidu.com/s/14iEOGT9xSAR1EUXTpoO01g 提取码: xvme
 
 访问`http://localhost:8080`即可访问首页，输入某个 github 的文件链接即可测试下载功能。
 
+其中`--host`和`--port`为可选参数，如果不传入，则使用默认值`localhost:3000`作为服务使用的地址。
+
+```bash
+./gp ~/static
+```
+
+访问`http://localhost:3000`即可访问首页，输入某个 github 的文件链接即可测试下载功能。
+
 ## 部署
 
 上线建议使用 caddy，可以基于 docker 容器，也可以直接安装在物理机中。
