@@ -30,7 +30,7 @@ func init() {
 		}
 		level = zerolog.TraceLevel
 	} else {
-		w, err = os.OpenFile("proxy.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+		w, err = os.OpenFile("gp.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 		if err != nil {
 			panic(err)
 		}
