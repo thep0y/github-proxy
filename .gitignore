@@ -1,5 +1,4 @@
 static/*
-/main
-/gp_*
 main.zip
 *.log
+dist/*
