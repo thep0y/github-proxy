@@ -25,9 +25,10 @@ Usage:
   gp [STATIC_DIR] [flags]
 
 Flags:
-  -h, --help          help for gp
-      --host string   本服务使用的主机 (default "localhost")
-      --port uint     本服务使用的端口 (default 3000)
+  -h, --help            help for gp
+      --host string     本服务使用的主机 (default "localhost")
+      --max-size uint   允许的最大体积，为 0 时无限制。单位为为 MB (default 500)
+      --port uint       本服务使用的端口 (default 3000)
 ```
 
 ## 编译
@@ -39,7 +40,7 @@ go build -ldflags="-s -w" -o gp main.go && upx -9 main
 ```
 
 - -s: 忽略符号表和调试信息
-- -w: 忽略DWARFv3调试信息，使用该选项后将无法使用gdb进行调试
+- -w: 忽略 DWARFv3 调试信息，使用该选项后将无法使用 gdb 进行调试
 
 用 upx 压缩能大幅缩小可执行文件体积，如果对程序的体积没有要求，可以不执行此步，因为使用 upx 压缩后在执行时会有一个用时很短的解压过程。
 
