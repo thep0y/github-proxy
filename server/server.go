@@ -19,9 +19,8 @@ import (
 	"github-proxy/middleware/logger"
 )
 
-const (
-	// 单个文件允许代理的最大体积 200 M，可根据实际需求修改
-	MAX_SIZE = 200 * 1024 * 1024
+var (
+	MAX_SIZE uint64
 
 	TIMEOUT = 10 * time.Second
 )
@@ -167,7 +166,7 @@ func handleDownloadResponse(
 	log.Info().Str("src", u).Str("size", fmt.Sprintf("%.2fM", fileSize)).Msg("File info")
 
 	// 根据实际情况可以解除此限制
-	if contentLength > MAX_SIZE {
+	if uint64(contentLength) > MAX_SIZE {
 		c.Status(http.StatusForbidden)
 		return &OverLimit{fileSize}
 	}
@@ -356,7 +355,9 @@ func index(c *gin.Context) {
 	c.HTML(http.StatusOK, "./static/index.html", nil)
 }
 
-func Run(staticDir, host string, port uint) {
+func Run(staticDir, host string, port, max_size uint) {
+	MAX_SIZE = uint64(max_size * 1024 * 1024)
+
 	r := gin.Default()
 
 	// 传入包含 index.html 的静态文件目录路径

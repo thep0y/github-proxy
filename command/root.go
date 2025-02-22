@@ -15,8 +15,9 @@ import (
 var (
 	log = logger.GetLogger()
 
-	host string
-	port uint
+	host     string
+	port     uint
+	max_size uint
 )
 
 var (
@@ -65,13 +66,14 @@ var rootCmd = &cobra.Command{
 	Run: func(_ *cobra.Command, args []string) {
 		log.Info().Str("static-dir", args[0]).Str("host", host).Uint("port", port).Msg("命令行参数")
 
-		server.Run(args[0], host, port)
+		server.Run(args[0], host, port, max_size)
 	},
 }
 
 func init() {
 	rootCmd.Flags().StringVar(&host, "host", "localhost", "本服务使用的主机")
 	rootCmd.Flags().UintVar(&port, "port", 3000, "本服务使用的端口")
+	rootCmd.Flags().UintVar(&max_size, "max-size", 500, "允许的最大体积，为 0 时无限制。单位为为 MB")
 }
 
 func Execute() {
