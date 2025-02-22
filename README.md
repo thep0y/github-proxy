@@ -36,7 +36,7 @@ Flags:
 如果 release 中没有你正在使用的平台或者你想使用最新的代码可自行编译本项目。
 
 ```bash
-go build -ldflags="-s -w" -o gp main.go && upx -9 main
+go build -ldflags="-s -w" -o gp main.go && upx -9 gp
 ```
 
 - -s: 忽略符号表和调试信息
@@ -50,7 +50,7 @@ go build -ldflags="-s -w" -o gp main.go && upx -9 main
 $Env:CGO_ENABLED=0
 $Env:GOOS='linux'
 $Env:GOARCH='amd64'
-go build -ldflags="-s -w" -o gp main.go && upx -9 main
+go build -ldflags="-s -w" -o gp main.go && upx -9 gp
 ```
 
 ### upx
