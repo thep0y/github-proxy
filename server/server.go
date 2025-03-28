@@ -22,7 +22,7 @@ import (
 var (
 	MAX_SIZE uint64
 
-	TIMEOUT = 10 * time.Second
+	TIMEOUT = 600 * time.Second
 )
 
 var (
