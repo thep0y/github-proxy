@@ -275,7 +275,8 @@ func proxy(c *gin.Context, u string, followRedirect bool) error {
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusPartialContent:
-		if env == "dev" || req.Header.Get("User-Agent")[:3] == "git" {
+		ua := req.Header.Get("User-Agent")
+		if env == "dev" || (len(ua) > 3 && ua[:3] == "git") {
 			handleResponse(c, resp)
 
 			return nil
